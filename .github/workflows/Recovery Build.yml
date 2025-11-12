@@ -1,6 +1,4 @@
-: ${{ secrets.GITHUB_TOKEN }}
 name: Recovery Build
-
 on:
   workflow_dispatch:
 
