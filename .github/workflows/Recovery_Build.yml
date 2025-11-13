@@ -76,6 +76,14 @@ jobs:
           distribution: 'zulu'
           java-version: '11'
 
+      - name: Install repo tool
+        run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          sudo mv ~/bin/repo /usr/local/bin/repo
+          repo --version
+
       - name: Sync TWRP/Lineage sources
         run: |
           cd ${{ steps.pwd.outputs.workspace-folder }}
