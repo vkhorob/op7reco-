@@ -46,10 +46,12 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Prepare build environment
-      run: |
-        sudo apt update && sudo apt upgrade -y
-        sudo apt install -y git python3 tar aria2 curl unzip openjdk-11-jdk bc ccache libncurses5 libncurses5-dev libssl-dev bison flex build-essential zip zlib1g-dev schedtool liblz4-tool lzop cpio
+    - name: Prepare the build environment
+  run: |
+    sudo apt update && sudo apt upgrade -y
+    sudo apt install -y git python3 tar aria2 curl unzip openjdk-11-jdk bc ccache libncurses5 libncurses5-dev libssl-dev bison flex build-essential zip zlib1g-dev schedtool liblz4-tool lzop cpio
+  working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
 
     - name: Install OpenJDK
       uses: actions/setup-java@v4
