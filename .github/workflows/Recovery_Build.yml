@@ -74,12 +74,13 @@ jobs:
             ssh-private-key: |
               ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Sync OrangeFox sources
-        run: |
-          cd ${{ steps.pwd.outputs.workspace-folder }}
-          git clone https://gitlab.com/OrangeFox/sync.git
-          cd sync
-          ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+         - name: Sync TWRP/Lineage sources
+      run: |
+        cd ${{ steps.pwd.outputs.workspace-folder }}
+        mkdir -p fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        cd fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        repo init -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+        repo sync -j$(nproc --all)
 
       - name: Clone device tree
         run: |
