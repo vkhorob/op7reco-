@@ -46,10 +46,15 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Prepare the build environment
+  - name: Prepare the build environment
   run: |
-    sudo apt update && sudo apt upgrade -y
-    sudo apt install -y git python3 tar aria2 curl unzip openjdk-11-jdk bc ccache libncurses5 libncurses5-dev libssl-dev bison flex build-essential zip zlib1g-dev schedtool liblz4-tool lzop cpio
+    sudo apt-get update -y
+    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
+      git-core gnupg flex bison build-essential zip curl zlib1g-dev \
+      gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses5-dev \
+      x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
+      libxml2-utils xsltproc unzip fontconfig openjdk-11-jdk \
+      bc ccache liblz4-tool lzop schedtool python3 aria2 tar rsync jq
   working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
 
