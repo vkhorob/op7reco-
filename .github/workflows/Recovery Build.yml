@@ -98,14 +98,47 @@ jobs:
           path: |
             ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/.repo
             ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/.repo-manifests
-          key: ${{ runner.os }}-repo-${{ github.event.inputs.MANIFEST_BRANCH }}-${{ hashFiles('.github/workflows/Recovery_Build.yml') }}
+          key: ${{ runner.os }}-repo-${{ github.event.inputs.MANIFEST_BRANCH }}-v3-${{ hashFiles('.github/workflows/Recovery_Build.yml') }}
           restore-keys: |
-            ${{ runner.os }}-repo-${{ github.event.inputs.MANIFEST_BRANCH }}-
+            ${{ runner.os }}-repo-${{ github.event.inputs.MANIFEST_BRANCH }}-v3-
 
-      - name: Sync crDroid sources (optimized)
-        if: steps.cache-repo.outputs.cache-hit != 'true'
+      - name: Debug cache and directory
         run: |
           cd ${{ steps.pwd.outputs.workspace-folder }}
+          echo "Current directory: $(pwd)"
+          echo "MANIFEST_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH }}"
+          echo "Cache hit: ${{ steps.cache-repo.outputs.cache-hit }}"
+          ls -la
+          if [ -d "fox_15.0" ]; then
+            echo "Android 15 directory exists"
+            cd fox_15.0
+            if [ -f ".repo/manifest.xml" ]; then
+              echo "Checking manifest content:"
+              cat .repo/manifest.xml | grep -i "default" | head -5 || echo "No default revision found"
+            fi
+          elif [ -d "fox_twrp-12.1" ]; then
+            echo "WARNING: TWRP 12.1 directory exists (CACHE ISSUE!)"
+          fi
+
+      - name: Force clean for Android 15 transition
+        if: steps.cache-repo.outputs.cache-hit == 'true'
+        run: |
+          cd ${{ steps.pwd.outputs.workspace-folder }}
+          echo "Clearing any old sources to ensure fresh Android 15 sync..."
+          # Remove any directory that's not our target Android 15
+          if [ -d "fox_twrp-12.1" ]; then
+            echo "Removing old TWRP 12.1 sources..."
+            rm -rf fox_twrp-12.1
+          fi
+          # Ensure clean Android 15 directory
+          rm -rf fox_15.0
+
+      - name: Sync crDroid sources (optimized)
+        run: |
+          cd ${{ steps.pwd.outputs.workspace-folder }}
+          
+          # Force clean directory for Android 15
+          rm -rf fox_${{ github.event.inputs.MANIFEST_BRANCH }}
           mkdir -p fox_${{ github.event.inputs.MANIFEST_BRANCH }}
           cd fox_${{ github.event.inputs.MANIFEST_BRANCH }}
 
@@ -116,6 +149,10 @@ jobs:
           repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --current-branch --optimized-fetch
 
           echo "Repo sync completed successfully!"
+          echo "Verifying Android version..."
+          if [ -f "build/make/core/version_defaults.mk" ]; then
+            grep -i "PLATFORM_VERSION" build/make/core/version_defaults.mk | head -2
+          fi
         timeout-minutes: 60  # Increased timeout for Android 15
 
       - name: Clone device tree
@@ -131,20 +168,24 @@ jobs:
           cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
           
           # Check if we need to add TWRP dependencies
-          if [ ! -d vendor/twrp ]; then
-            echo "Setting up TWRP build environment..."
+          if [ ! -d "bootable/recovery" ] || [ ! -d "vendor/twrp" ]; then
+            echo "Setting up TWRP build environment for Android 15..."
             # Add TWRP manifest if building TWRP on crDroid base
             mkdir -p .repo/local_manifests
             cat > .repo/local_manifests/twrp.xml << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <!-- Add TWRP recovery dependencies if needed -->
+  <!-- Add TWRP recovery dependencies for Android 15 -->
   <remote name="github"
           fetch="https://github.com/" />
   <project path="bootable/recovery" name="TeamWin/android_bootable_recovery" remote="github" revision="android-15.0" />
+  <project path="vendor/twrp" name="TeamWin/android_vendor_twrp" remote="github" revision="android-15.0" />
 </manifest>
 EOF
-            repo sync -c -j$(nproc --all) bootable/recovery --force-sync --no-clone-bundle
+            echo "Syncing TWRP dependencies..."
+            repo sync -c -j$(nproc --all) bootable/recovery vendor/twrp --force-sync --no-clone-bundle
+          else
+            echo "TWRP dependencies already present"
           fi
 
       - name: Set Swap Space
@@ -169,8 +210,8 @@ EOF
           # Try different lunch commands for compatibility
           echo "Attempting to lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng..."
           if ! lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng; then
-            echo "Fallback: trying to lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng"
-            lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng || true
+            echo "Fallback: trying lineage_${{ github.event.inputs.DEVICE_NAME }}-userdebug"
+            lunch lineage_${{ github.event.inputs.DEVICE_NAME }}-userdebug || lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
           fi
           
           echo "Starting recovery build..."
@@ -184,9 +225,16 @@ EOF
         run: |
           cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
           echo "Build artifacts found:"
-          find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -type f -name "*.img" -o -name "*.zip" | while read file; do
-            echo "  - $file ($(du -h "$file" | cut -f1))"
-          done || echo "No artifacts found"
+          find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -type f \( -name "*.img" -o -name "*.zip" \) | while read file; do
+            if [ -f "$file" ]; then
+              echo "  - $file ($(du -h "$file" | cut -f1))"
+            fi
+          done
+          if [ $? -ne 0 ]; then
+            echo "No build artifacts found"
+            echo "Checking build directory structure..."
+            find out/target/product/ -type d | head -10
+          fi
 
       - name: Upload to Release
         if: success()
