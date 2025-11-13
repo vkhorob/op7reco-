@@ -3,50 +3,55 @@ name: TWRP Recovery Build (crDroid Android 15)
 on:
   workflow_dispatch:
     inputs:
-      RUNNER_TYPE:
-        description: 'Select runner type (Windows has more disk space)'
+      RUNNER_OS:
+        description: 'Select runner OS (Windows has more disk space)'
         required: true
-        type: choice
-        default: 'windows'
-        options:
-        - windows
-        - linux
+        default: 'windows-latest'
+        type: string
       MANIFEST_URL:
         description: 'Manifest URL'
         required: true
         default: 'https://github.com/crdroidandroid/android.git'
+        type: string
       MANIFEST_BRANCH:
         description: 'Manifest Branch'
         required: true
         default: '15.0'
+        type: string
       DEVICE_TREE_URL:
         description: 'Device Tree URL'
         required: true
         default: 'https://github.com/crdroidandroid/android_device_oneplus_guacamoleb.git'
+        type: string
       DEVICE_TREE_BRANCH:
         description: 'Device Tree Branch'
         required: true
         default: '15.0'
+        type: string
       DEVICE_PATH:
         description: 'Device Path'
         required: true
         default: 'device/oneplus/guacamoleb'
+        type: string
       DEVICE_NAME:
         description: 'Device Name'
         required: true
         default: 'guacamoleb'
+        type: string
       MAKEFILE_NAME:
         description: 'Makefile Name'
         required: true
         default: 'twrp_guacamoleb'
+        type: string
       BUILD_TARGET:
         description: 'Build Target'
         required: true
         default: 'recoveryimage'
+        type: string
 
 jobs:
   build:
-    runs-on: ${{ github.event.inputs.RUNNER_TYPE == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.inputs.RUNNER_OS }}
     timeout-minutes: 240
     permissions:
       contents: write
