@@ -3,11 +3,14 @@ name: TWRP Recovery Build (crDroid Android 15)
 on:
   workflow_dispatch:
     inputs:
-      USE_WINDOWS_RUNNER:
-        description: 'Use Windows runner (more disk space)'
+      RUNNER_TYPE:
+        description: 'Select runner type (Windows has more disk space)'
         required: true
-        type: boolean
-        default: true
+        type: choice
+        default: 'windows'
+        options:
+        - windows
+        - linux
       MANIFEST_URL:
         description: 'Manifest URL'
         required: true
@@ -43,7 +46,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ github.event.inputs.USE_WINDOWS_RUNNER && 'windows-latest' || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.inputs.RUNNER_TYPE == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 240
     permissions:
       contents: write
@@ -204,3 +207,11 @@ EOF
             Built automatically via GitHub Actions
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
+          path: ${{ steps.workspace.outputs.folder }}/crdroid_android_15/build.log
+          retention-days: 3
