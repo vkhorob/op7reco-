@@ -39,7 +39,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180  # Increased for Android 15 builds
     permissions:
       contents: write
 
@@ -67,23 +67,29 @@ jobs:
             git-core gnupg flex bison build-essential zip curl zlib1g-dev \
             gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses-dev \
             x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
-            libxml2-utils xsltproc unzip fontconfig openjdk-11-jdk \
-            bc ccache liblz4-tool lzop schedtool python3 aria2 tar rsync jq
+            libxml2-utils xsltproc unzip fontconfig openjdk-11-jdk openjdk-17-jdk \
+            bc ccache liblz4-tool lzop schedtool python3 python3-pip aria2 tar rsync jq \
+            repo libncurses6 libssl-dev libffi-dev  # Added missing dependencies
+          
+          # Setup Python symlinks for Android build system
+          sudo ln -sf /usr/bin/python3 /usr/bin/python || true
+          
+          echo "Build environment setup complete!"
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-      - name: Install OpenJDK
+      - name: Install OpenJDK (Multiple versions)
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
-          java-version: '11'
+          distribution: 'temurin'
+          java-version: |
+            11
+            17
 
-      - name: Install repo tool
+      - name: Configure Git for repo sync
         run: |
-          mkdir -p ~/bin
-          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-          chmod a+x ~/bin/repo
-          sudo mv ~/bin/repo /usr/local/bin/repo
-          repo --version
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git config --global color.ui false
 
       - name: Cache Android sources
         uses: actions/cache@v3
@@ -103,45 +109,116 @@ jobs:
           mkdir -p fox_${{ github.event.inputs.MANIFEST_BRANCH }}
           cd fox_${{ github.event.inputs.MANIFEST_BRANCH }}
 
-          echo "Initializing repo with shallow clone..."
+          echo "Initializing crDroid Android ${{ github.event.inputs.MANIFEST_BRANCH }} repo..."
           repo init -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }} --depth=1
 
           echo "Starting repo sync with optimizations..."
-          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --current-branch
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --current-branch --optimized-fetch
 
           echo "Repo sync completed successfully!"
-        timeout-minutes: 45
+        timeout-minutes: 60  # Increased timeout for Android 15
 
       - name: Clone device tree
         run: |
           cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+          echo "Cloning device tree for ${{ github.event.inputs.DEVICE_NAME }}..."
+          rm -rf ./${{ github.event.inputs.DEVICE_PATH }}  # Clean existing
           git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+          echo "Device tree cloned successfully!"
+
+      - name: Setup TWRP environment for crDroid
+        run: |
+          cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+          
+          # Check if we need to add TWRP dependencies
+          if [ ! -d vendor/twrp ]; then
+            echo "Setting up TWRP build environment..."
+            # Add TWRP manifest if building TWRP on crDroid base
+            mkdir -p .repo/local_manifests
+            cat > .repo/local_manifests/twrp.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <!-- Add TWRP recovery dependencies if needed -->
+  <remote name="github"
+          fetch="https://github.com/" />
+  <project path="bootable/recovery" name="TeamWin/android_bootable_recovery" remote="github" revision="android-15.0" />
+</manifest>
+EOF
+            repo sync -c -j$(nproc --all) bootable/recovery --force-sync --no-clone-bundle
+          fi
 
       - name: Set Swap Space
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 12
+          swap-size-gb: 16  # Increased for Android 15 builds
 
       - name: Build recovery
         run: |
           cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+          
+          echo "Setting up build environment..."
           source build/envsetup.sh
+          
+          echo "Configuring build for ${{ github.event.inputs.DEVICE_NAME }}..."
           export ALLOW_MISSING_DEPENDENCIES=true
-          lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
+          export LC_ALL=C
+          export USE_CCACHE=1
+          export CCACHE_EXEC=$(which ccache)
+          ccache -M 50G
+          
+          # Try different lunch commands for compatibility
+          echo "Attempting to lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng..."
+          if ! lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng; then
+            echo "Fallback: trying to lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng"
+            lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng || true
+          fi
+          
+          echo "Starting recovery build..."
           make clean
-          make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+          make ${{ github.event.inputs.BUILD_TARGET }} -j$(nproc --all) 2>&1 | tee build.log
+          
+          echo "Build completed! Checking for output files..."
+          find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -name "*.img" -o -name "*.zip" | head -10
+
+      - name: Check build artifacts
+        run: |
+          cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+          echo "Build artifacts found:"
+          find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -type f -name "*.img" -o -name "*.zip" | while read file; do
+            echo "  - $file ($(du -h "$file" | cut -f1))"
+          done || echo "No artifacts found"
 
       - name: Upload to Release
+        if: success()
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
             ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
           name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
-          tag_name: ${{ github.run_id }}
+          tag_name: build-${{ github.run_id }}
           body: |
-            Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
-            Device: ${{ github.event.inputs.DEVICE_NAME }}
-            Target: ${{ github.event.inputs.BUILD_TARGET }}
+            🚀 crDroid Android ${{ github.event.inputs.MANIFEST_BRANCH }} Recovery Build
+            
+            **Device:** ${{ github.event.inputs.DEVICE_NAME }}
+            **Target:** ${{ github.event.inputs.BUILD_TARGET }}
+            **Makefile:** ${{ github.event.inputs.MAKEFILE_NAME }}
+            
+            **Build Details:**
+            - Manifest: ${{ github.event.inputs.MANIFEST_URL }}
+            - Device Tree: ${{ github.event.inputs.DEVICE_TREE_URL }}
+            - Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}
+            
+            Built automatically via GitHub Actions
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+          path: |
+            ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/build.log
+            ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/error.log
+          retention-days: 7
