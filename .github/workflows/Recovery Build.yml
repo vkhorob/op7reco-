@@ -47,15 +47,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cleanup workspace
+      - name: Clean workspace
         run: |
           echo "Cleaning workspace..."
           sudo rm -rf $GITHUB_WORKSPACE/workspace || true
+          mkdir -p $GITHUB_WORKSPACE/workspace
 
       - name: Initialize workspace
         id: workspace
         run: |
-          mkdir -p workspace
           cd workspace
           echo "folder=$(pwd)" >> $GITHUB_OUTPUT
 
@@ -71,7 +71,6 @@ jobs:
             schedtool aria2 tar rsync jq repo libssl-dev libffi-dev
           
           sudo ln -sf /usr/bin/python3 /usr/bin/python
-        working-directory: ${{ steps.workspace.outputs.folder }}
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -83,41 +82,39 @@ jobs:
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
-          git config --global color.ui false
 
       - name: Clean previous sources
         run: |
-          cd ${{ steps.workspace.outputs.folder }}
-          rm -rf crdroid_android_15
-        working-directory: ${{ steps.workspace.outputs.folder }}
+          cd $GITHUB_WORKSPACE/workspace
+          rm -rf crdroid_android_15 fox_15.0 fox_twrp-12.1
 
       - name: Sync crDroid Android 15 sources
         run: |
-          cd ${{ steps.workspace.outputs.folder }}
+          cd $GITHUB_WORKSPACE/workspace
           mkdir -p crdroid_android_15
           cd crdroid_android_15
           
-          echo "Initializing crDroid Android 15 repository..."
-          repo init -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }} --depth=1
+          echo "Initializing crDroid Android 15..."
+          repo init -u https://github.com/crdroidandroid/android.git -b 15.0 --depth=1
           
-          echo "Syncing crDroid sources..."
-          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --current-branch
+          echo "Syncing sources..."
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
           
-          echo "crDroid Android 15 sources synced successfully!"
+          echo "✅ crDroid Android 15 synced successfully!"
         timeout-minutes: 60
 
       - name: Clone device tree
         run: |
-          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
-          echo "Cloning device tree for ${{ github.event.inputs.DEVICE_NAME }}..."
-          rm -rf ./${{ github.event.inputs.DEVICE_PATH }}
-          git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-          echo "Device tree cloned successfully!"
+          cd $GITHUB_WORKSPACE/workspace/crdroid_android_15
+          echo "Cloning device tree..."
+          rm -rf device/oneplus/guacamoleb
+          git clone https://github.com/crdroidandroid/android_device_oneplus_guacamoleb.git -b 15.0 device/oneplus/guacamoleb
+          echo "✅ Device tree cloned!"
 
-      - name: Add TWRP recovery source
+      - name: Add TWRP recovery
         run: |
-          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
-          echo "Adding TWRP recovery components..."
+          cd $GITHUB_WORKSPACE/workspace/crdroid_android_15
+          echo "Adding TWRP recovery..."
           
           mkdir -p .repo/local_manifests
           cat > .repo/local_manifests/twrp.xml << 'EOF'
@@ -128,8 +125,8 @@ jobs:
 </manifest>
 EOF
           
-          repo sync -c -j$(nproc --all) bootable/recovery --force-sync --no-clone-bundle
-          echo "TWRP recovery components added!"
+          repo sync -c -j$(nproc --all) bootable/recovery --force-sync
+          echo "✅ TWRP recovery added!"
 
       - name: Setup swap space
         uses: pierotofy/set-swap-space@master
@@ -138,64 +135,27 @@ EOF
 
       - name: Build TWRP recovery
         run: |
-          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
+          cd $GITHUB_WORKSPACE/workspace/crdroid_android_15
           
-          echo "Setting up build environment..."
           source build/envsetup.sh
-          
-          echo "Configuring build for ${{ github.event.inputs.DEVICE_NAME }}..."
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
           export USE_CCACHE=1
           ccache -M 50G
           
-          echo "Lunching target: ${{ github.event.inputs.MAKEFILE_NAME }}-eng"
-          lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
-          
-          echo "Building TWRP recovery..."
+          lunch twrp_guacamoleb-eng
           make clean
-          make ${{ github.event.inputs.BUILD_TARGET }} -j$(nproc --all)
+          make recoveryimage -j$(nproc --all)
           
-          echo "Build completed!"
+          echo "✅ Build completed!"
 
-      - name: Check build artifacts
-        run: |
-          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
-          echo "Checking for build artifacts..."
-          find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -name "*.img" -o -name "*.zip" | while read file; do
-            echo "✓ Found: $file ($(du -h "$file" | cut -f1))"
-          done
-
-      - name: Upload recovery to release
+      - name: Upload recovery
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ${{ steps.workspace.outputs.folder }}/crdroid_android_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-            ${{ steps.workspace.outputs.folder }}/crdroid_android_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
-          name: TWRP-${{ github.event.inputs.DEVICE_NAME }}-Android15-${{ github.run_number }}
-          tag_name: twrp-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
-          body: |
-            🚀 TWRP Recovery for ${{ github.event.inputs.DEVICE_NAME }}
-            
-            **Build Details:**
-            - Android Version: 15.0
-            - Source: crDroid
-            - Device: ${{ github.event.inputs.DEVICE_NAME }}
-            - Build Target: ${{ github.event.inputs.BUILD_TARGET }}
-            
-            **Sources:**
-            - Manifest: ${{ github.event.inputs.MANIFEST_URL }}
-            - Device Tree: ${{ github.event.inputs.DEVICE_TREE_URL }}
-            
-            Built automatically via GitHub Actions
+          files: $GITHUB_WORKSPACE/workspace/crdroid_android_15/out/target/product/guacamoleb/recovery.img
+          name: TWRP-guacamoleb-Android15
+          tag_name: twrp-$(date +%Y%m%d-%H%M%S)
+          body: "TWRP Recovery for OnePlus 7 (Android 15)"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload build logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
-          path: ${{ steps.workspace.outputs.folder }}/crdroid_android_15/build.log
-          retention-days: 7
