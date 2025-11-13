@@ -1,4 +1,4 @@
-name: Recovery Build
+name: TWRP Recovery Build
 
 on:
   workflow_dispatch:
@@ -34,12 +34,12 @@ on:
       BUILD_TARGET:
         description: 'Build Target'
         required: true
-        default: 'recovery'
+        default: 'recoveryimage'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 180  # Increased for Android 15 builds
+    timeout-minutes: 240
     permissions:
       contents: write
 
@@ -47,155 +47,98 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cleanup old workspace
+      - name: Cleanup workspace
         run: |
-          echo "Cleaning old workspace..."
+          echo "Cleaning workspace..."
           sudo rm -rf $GITHUB_WORKSPACE/workspace || true
-          echo "Cleanup complete."
 
       - name: Initialize workspace
-        id: pwd
+        id: workspace
         run: |
-          mkdir workspace
+          mkdir -p workspace
           cd workspace
-          echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+          echo "folder=$(pwd)" >> $GITHUB_OUTPUT
 
-      - name: Prepare the build environment
+      - name: Install build dependencies
         run: |
           sudo apt-get update -y
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
             git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-            gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses-dev \
+            gcc-multilib g++-multilib libc6-dev-i386 libncurses5-dev \
             x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
-            libxml2-utils xsltproc unzip fontconfig openjdk-11-jdk openjdk-17-jdk \
-            bc ccache liblz4-tool lzop schedtool python3 python3-pip aria2 tar rsync jq \
-            repo libncurses6 libssl-dev libffi-dev  # Added missing dependencies
+            libxml2-utils xsltproc unzip fontconfig python3 python3-pip \
+            openjdk-11-jdk openjdk-17-jdk bc ccache liblz4-tool lzop \
+            schedtool aria2 tar rsync jq repo libssl-dev libffi-dev
           
-          # Setup Python symlinks for Android build system
-          sudo ln -sf /usr/bin/python3 /usr/bin/python || true
-          
-          echo "Build environment setup complete!"
-        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+          sudo ln -sf /usr/bin/python3 /usr/bin/python
+        working-directory: ${{ steps.workspace.outputs.folder }}
 
-      - name: Install OpenJDK (Multiple versions)
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: |
-            11
-            17
+          java-version: '17'
 
-      - name: Configure Git for repo sync
+      - name: Configure Git
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           git config --global color.ui false
 
-      - name: Cache Android sources
-        uses: actions/cache@v3
-        id: cache-repo
-        with:
-          path: |
-            ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/.repo
-            ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/.repo-manifests
-          key: ${{ runner.os }}-repo-${{ github.event.inputs.MANIFEST_BRANCH }}-v3-${{ hashFiles('.github/workflows/Recovery_Build.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-repo-${{ github.event.inputs.MANIFEST_BRANCH }}-v3-
-
-      - name: Debug cache and directory
+      - name: Clean previous sources
         run: |
-          cd ${{ steps.pwd.outputs.workspace-folder }}
-          echo "Current directory: $(pwd)"
-          echo "MANIFEST_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH }}"
-          echo "Cache hit: ${{ steps.cache-repo.outputs.cache-hit }}"
-          ls -la
-          if [ -d "fox_15.0" ]; then
-            echo "Android 15 directory exists"
-            cd fox_15.0
-            if [ -f ".repo/manifest.xml" ]; then
-              echo "Checking manifest content:"
-              cat .repo/manifest.xml | grep -i "default" | head -5 || echo "No default revision found"
-            fi
-          elif [ -d "fox_twrp-12.1" ]; then
-            echo "WARNING: TWRP 12.1 directory exists (CACHE ISSUE!)"
-          fi
+          cd ${{ steps.workspace.outputs.folder }}
+          rm -rf crdroid_android_15
+        working-directory: ${{ steps.workspace.outputs.folder }}
 
-      - name: Force clean for Android 15 transition
-        if: steps.cache-repo.outputs.cache-hit == 'true'
+      - name: Sync crDroid Android 15 sources
         run: |
-          cd ${{ steps.pwd.outputs.workspace-folder }}
-          echo "Clearing any old sources to ensure fresh Android 15 sync..."
-          # Remove any directory that's not our target Android 15
-          if [ -d "fox_twrp-12.1" ]; then
-            echo "Removing old TWRP 12.1 sources..."
-            rm -rf fox_twrp-12.1
-          fi
-          # Ensure clean Android 15 directory
-          rm -rf fox_15.0
-
-      - name: Sync crDroid sources (optimized)
-        run: |
-          cd ${{ steps.pwd.outputs.workspace-folder }}
+          cd ${{ steps.workspace.outputs.folder }}
+          mkdir -p crdroid_android_15
+          cd crdroid_android_15
           
-          # Force clean directory for Android 15
-          rm -rf fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-          mkdir -p fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-          cd fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-
-          echo "Initializing crDroid Android ${{ github.event.inputs.MANIFEST_BRANCH }} repo..."
+          echo "Initializing crDroid Android 15 repository..."
           repo init -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }} --depth=1
-
-          echo "Starting repo sync with optimizations..."
-          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --current-branch --optimized-fetch
-
-          echo "Repo sync completed successfully!"
-          echo "Verifying Android version..."
-          if [ -f "build/make/core/version_defaults.mk" ]; then
-            grep -i "PLATFORM_VERSION" build/make/core/version_defaults.mk | head -2
-          fi
-        timeout-minutes: 60  # Increased timeout for Android 15
+          
+          echo "Syncing crDroid sources..."
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --current-branch
+          
+          echo "crDroid Android 15 sources synced successfully!"
+        timeout-minutes: 60
 
       - name: Clone device tree
         run: |
-          cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
           echo "Cloning device tree for ${{ github.event.inputs.DEVICE_NAME }}..."
-          rm -rf ./${{ github.event.inputs.DEVICE_PATH }}  # Clean existing
+          rm -rf ./${{ github.event.inputs.DEVICE_PATH }}
           git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
           echo "Device tree cloned successfully!"
 
-      - name: Setup TWRP environment for crDroid
+      - name: Add TWRP recovery source
         run: |
-          cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
+          echo "Adding TWRP recovery components..."
           
-          # Check if we need to add TWRP dependencies
-          if [ ! -d "bootable/recovery" ] || [ ! -d "vendor/twrp" ]; then
-            echo "Setting up TWRP build environment for Android 15..."
-            # Add TWRP manifest if building TWRP on crDroid base
-            mkdir -p .repo/local_manifests
-            cat > .repo/local_manifests/twrp.xml << 'EOF'
+          mkdir -p .repo/local_manifests
+          cat > .repo/local_manifests/twrp.xml << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <!-- Add TWRP recovery dependencies for Android 15 -->
-  <remote name="github"
-          fetch="https://github.com/" />
+  <remote name="github" fetch="https://github.com/" />
   <project path="bootable/recovery" name="TeamWin/android_bootable_recovery" remote="github" revision="android-15.0" />
-  <project path="vendor/twrp" name="TeamWin/android_vendor_twrp" remote="github" revision="android-15.0" />
 </manifest>
 EOF
-            echo "Syncing TWRP dependencies..."
-            repo sync -c -j$(nproc --all) bootable/recovery vendor/twrp --force-sync --no-clone-bundle
-          else
-            echo "TWRP dependencies already present"
-          fi
+          
+          repo sync -c -j$(nproc --all) bootable/recovery --force-sync --no-clone-bundle
+          echo "TWRP recovery components added!"
 
-      - name: Set Swap Space
+      - name: Setup swap space
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 16  # Increased for Android 15 builds
+          swap-size-gb: 16
 
-      - name: Build recovery
+      - name: Build TWRP recovery
         run: |
-          cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
           
           echo "Setting up build environment..."
           source build/envsetup.sh
@@ -204,58 +147,46 @@ EOF
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
           export USE_CCACHE=1
-          export CCACHE_EXEC=$(which ccache)
           ccache -M 50G
           
-          # Try different lunch commands for compatibility
-          echo "Attempting to lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng..."
-          if ! lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng; then
-            echo "Fallback: trying lineage_${{ github.event.inputs.DEVICE_NAME }}-userdebug"
-            lunch lineage_${{ github.event.inputs.DEVICE_NAME }}-userdebug || lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
-          fi
+          echo "Lunching target: ${{ github.event.inputs.MAKEFILE_NAME }}-eng"
+          lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
           
-          echo "Starting recovery build..."
+          echo "Building TWRP recovery..."
           make clean
-          make ${{ github.event.inputs.BUILD_TARGET }} -j$(nproc --all) 2>&1 | tee build.log
+          make ${{ github.event.inputs.BUILD_TARGET }} -j$(nproc --all)
           
-          echo "Build completed! Checking for output files..."
-          find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -name "*.img" -o -name "*.zip" | head -10
+          echo "Build completed!"
 
       - name: Check build artifacts
         run: |
-          cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-          echo "Build artifacts found:"
-          find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -type f \( -name "*.img" -o -name "*.zip" \) | while read file; do
-            if [ -f "$file" ]; then
-              echo "  - $file ($(du -h "$file" | cut -f1))"
-            fi
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
+          echo "Checking for build artifacts..."
+          find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -name "*.img" -o -name "*.zip" | while read file; do
+            echo "✓ Found: $file ($(du -h "$file" | cut -f1))"
           done
-          if [ $? -ne 0 ]; then
-            echo "No build artifacts found"
-            echo "Checking build directory structure..."
-            find out/target/product/ -type d | head -10
-          fi
 
-      - name: Upload to Release
+      - name: Upload recovery to release
         if: success()
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
-            ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
-          name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
-          tag_name: build-${{ github.run_id }}
+            ${{ steps.workspace.outputs.folder }}/crdroid_android_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+            ${{ steps.workspace.outputs.folder }}/crdroid_android_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+          name: TWRP-${{ github.event.inputs.DEVICE_NAME }}-Android15-${{ github.run_number }}
+          tag_name: twrp-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
           body: |
-            🚀 crDroid Android ${{ github.event.inputs.MANIFEST_BRANCH }} Recovery Build
-            
-            **Device:** ${{ github.event.inputs.DEVICE_NAME }}
-            **Target:** ${{ github.event.inputs.BUILD_TARGET }}
-            **Makefile:** ${{ github.event.inputs.MAKEFILE_NAME }}
+            🚀 TWRP Recovery for ${{ github.event.inputs.DEVICE_NAME }}
             
             **Build Details:**
+            - Android Version: 15.0
+            - Source: crDroid
+            - Device: ${{ github.event.inputs.DEVICE_NAME }}
+            - Build Target: ${{ github.event.inputs.BUILD_TARGET }}
+            
+            **Sources:**
             - Manifest: ${{ github.event.inputs.MANIFEST_URL }}
             - Device Tree: ${{ github.event.inputs.DEVICE_TREE_URL }}
-            - Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}
             
             Built automatically via GitHub Actions
         env:
@@ -265,8 +196,6 @@ EOF
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
-          path: |
-            ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/build.log
-            ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/error.log
+          name: build-logs-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
+          path: ${{ steps.workspace.outputs.folder }}/crdroid_android_15/build.log
           retention-days: 7
