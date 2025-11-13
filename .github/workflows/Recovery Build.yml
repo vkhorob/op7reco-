@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       RUNNER_OS:
-        description: 'Select runner OS (Windows has more disk space)'
+        description: 'Runner OS (windows-latest has more space)'
         required: true
         default: 'windows-latest'
         type: string
@@ -66,6 +66,8 @@ jobs:
           if [ "${{ runner.os }}" = "Linux" ]; then
             sudo rm -rf /home/runner/work/op7reco-/op7reco-/workspace/*
             sudo rm -rf /home/runner/work/op7reco-/op7reco-/.repo
+            # Remove any fox_* directories
+            sudo rm -rf /home/runner/work/op7reco-/op7reco-/workspace/fox_*
           else
             Remove-Item -Recurse -Force "$env:GITHUB_WORKSPACE\workspace\*" -ErrorAction SilentlyContinue
             Remove-Item -Recurse -Force "$env:GITHUB_WORKSPACE\.repo" -ErrorAction SilentlyContinue
@@ -118,8 +120,12 @@ jobs:
       - name: Sync crDroid Android 15 sources
         run: |
           cd ${{ steps.workspace.outputs.folder }}
-          mkdir -p crdroid_android_15
-          cd crdroid_android_15
+          
+          # HARDCODED DIRECTORY NAME - NO MORE fox_*
+          echo "🗂️ CREATING crdroid_build_15 DIRECTORY..."
+          rm -rf crdroid_build_15
+          mkdir -p crdroid_build_15
+          cd crdroid_build_15
           
           echo "🔄 INITIALIZING crDroid Android 15..."
           repo init -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }} --depth=1
@@ -127,12 +133,12 @@ jobs:
           echo "📥 SYNCING SOURCES (this will take time)..."
           repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --current-branch
           
-          echo "✅ crDroid Android 15 sources synced!"
+          echo "✅ crDroid Android 15 sources synced to crdroid_build_15!"
         timeout-minutes: 90
 
       - name: Clone device tree
         run: |
-          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_build_15
           echo "📱 CLONING DEVICE TREE..."
           rm -rf ./${{ github.event.inputs.DEVICE_PATH }}
           git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
@@ -140,7 +146,7 @@ jobs:
 
       - name: Add TWRP recovery components
         run: |
-          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_build_15
           echo "🔧 ADDING TWRP RECOVERY COMPONENTS..."
           
           mkdir -p .repo/local_manifests
@@ -163,7 +169,7 @@ EOF
 
       - name: Build TWRP recovery
         run: |
-          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_build_15
           
           echo "⚙️ SETTING UP BUILD ENVIRONMENT..."
           source build/envsetup.sh
@@ -185,7 +191,7 @@ EOF
 
       - name: Check build artifacts
         run: |
-          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_build_15
           echo "📋 BUILD ARTIFACTS:"
           find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -name "*.img" -o -name "*.zip" | while read file; do
             echo "✅ FOUND: $file ($(du -h "$file" | cut -f1))"
@@ -196,8 +202,8 @@ EOF
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ steps.workspace.outputs.folder }}/crdroid_android_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-            ${{ steps.workspace.outputs.folder }}/crdroid_android_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+            ${{ steps.workspace.outputs.folder }}/crdroid_build_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+            ${{ steps.workspace.outputs.folder }}/crdroid_build_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
           name: TWRP-${{ github.event.inputs.DEVICE_NAME }}-Android15-${{ github.run_number }}
           tag_name: twrp-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
           body: |
@@ -218,5 +224,5 @@ EOF
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
-          path: ${{ steps.workspace.outputs.folder }}/crdroid_android_15/build.log
+          path: ${{ steps.workspace.outputs.folder }}/crdroid_build_15/build.log
           retention-days: 3
