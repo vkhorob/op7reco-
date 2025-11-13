@@ -1,36 +1,41 @@
-name: TWRP Recovery Build
+name: TWRP Recovery Build (crDroid Android 15)
 
 on:
   workflow_dispatch:
     inputs:
+      USE_WINDOWS_RUNNER:
+        description: 'Use Windows runner (more disk space)'
+        required: true
+        type: boolean
+        default: true
       MANIFEST_URL:
         description: 'Manifest URL'
         required: true
-        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git'
+        default: 'https://github.com/crdroidandroid/android.git'
       MANIFEST_BRANCH:
         description: 'Manifest Branch'
         required: true
-        default: 'twrp-12.1'
+        default: '15.0'
       DEVICE_TREE_URL:
         description: 'Device Tree URL'
         required: true
-        default: 'https://github.com/TeamWin/android_device_oneplus_guacamole.git'
+        default: 'https://github.com/crdroidandroid/android_device_oneplus_guacamoleb.git'
       DEVICE_TREE_BRANCH:
         description: 'Device Tree Branch'
         required: true
-        default: 'twrp-12.1'
+        default: '15.0'
       DEVICE_PATH:
         description: 'Device Path'
         required: true
-        default: 'device/oneplus/guacamole'
+        default: 'device/oneplus/guacamoleb'
       DEVICE_NAME:
         description: 'Device Name'
         required: true
-        default: 'guacamole'
+        default: 'guacamoleb'
       MAKEFILE_NAME:
         description: 'Makefile Name'
         required: true
-        default: 'twrp_guacamole'
+        default: 'twrp_guacamoleb'
       BUILD_TARGET:
         description: 'Build Target'
         required: true
@@ -38,8 +43,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
+    runs-on: ${{ github.event.inputs.USE_WINDOWS_RUNNER && 'windows-latest' || 'ubuntu-latest' }}
+    timeout-minutes: 240
     permissions:
       contents: write
 
@@ -50,39 +55,46 @@ jobs:
       - name: Nuclear cleanup
         run: |
           echo "🧹 CLEANING ALL LEFTOVER DIRECTORIES..."
-          sudo rm -rf /home/runner/work/op7reco-/op7reco-/workspace/*
-          sudo rm -rf /home/runner/work/op7reco-/op7reco-/.repo
-          sudo rm -rf /home/runner/work/op7reco-/*/.* 2>/dev/null || true
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo rm -rf /home/runner/work/op7reco-/op7reco-/workspace/*
+            sudo rm -rf /home/runner/work/op7reco-/op7reco-/.repo
+          else
+            Remove-Item -Recurse -Force "$env:GITHUB_WORKSPACE\workspace\*" -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force "$env:GITHUB_WORKSPACE\.repo" -ErrorAction SilentlyContinue
+          fi
           echo "✅ Cleanup complete!"
-          echo "📊 Remaining disk space:"
-          df -h
 
       - name: Initialize workspace
         id: workspace
         run: |
-          mkdir -p /home/runner/work/op7reco-/op7reco-/workspace
-          cd /home/runner/work/op7reco-/op7reco-/workspace
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            mkdir -p /home/runner/work/op7reco-/op7reco-/workspace
+            cd /home/runner/work/op7reco-/op7reco-/workspace
+          else
+            mkdir -p "$env:GITHUB_WORKSPACE\workspace"
+            cd "$env:GITHUB_WORKSPACE\workspace"
+          fi
           echo "folder=$(pwd)" >> $GITHUB_OUTPUT
-
-      - name: Check disk space after cleanup
-        run: |
-          echo "📦 AVAILABLE DISK SPACE:"
-          df -h
-          echo "🗂️ WORKSPACE CONTENTS:"
-          ls -la /home/runner/work/op7reco-/op7reco-/workspace/ || echo "Workspace is clean"
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update -y
-          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
-            git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-            gcc-multilib g++-multilib libc6-dev-i386 libncurses5-dev \
-            x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
-            libxml2-utils xsltproc unzip fontconfig python3 python3-pip \
-            openjdk-11-jdk openjdk-17-jdk bc ccache liblz4-tool lzop \
-            schedtool aria2 tar rsync jq repo libssl-dev libffi-dev
-          
-          sudo ln -sf /usr/bin/python3 /usr/bin/python
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get update -y
+            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
+              git-core gnupg flex bison build-essential zip curl zlib1g-dev \
+              gcc-multilib g++-multilib libc6-dev-i386 libncurses5-dev \
+              x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
+              libxml2-utils xsltproc unzip fontconfig python3 python3-pip \
+              openjdk-11-jdk openjdk-17-jdk bc ccache liblz4-tool lzop \
+              schedtool aria2 tar rsync jq repo libssl-dev libffi-dev
+            
+            sudo ln -sf /usr/bin/python3 /usr/bin/python
+          else
+            # Windows - install Chocolatey and dependencies
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            choco install -y git python make
+          fi
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -94,39 +106,56 @@ jobs:
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
-          git config --global color.ui false
 
-      - name: Sync TWRP sources
+      - name: Sync crDroid Android 15 sources
         run: |
-          cd /home/runner/work/op7reco-/op7reco-/workspace
-          mkdir -p twrp_build
-          cd twrp_build
+          cd ${{ steps.workspace.outputs.folder }}
+          mkdir -p crdroid_android_15
+          cd crdroid_android_15
           
-          echo "🔄 INITIALIZING TWRP REPOSITORY..."
+          echo "🔄 INITIALIZING crDroid Android 15..."
           repo init -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }} --depth=1
           
-          echo "📥 SYNCING TWRP SOURCES..."
+          echo "📥 SYNCING SOURCES (this will take time)..."
           repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --current-branch
           
-          echo "✅ TWRP SOURCES SYNCED SUCCESSFULLY!"
-        timeout-minutes: 30
+          echo "✅ crDroid Android 15 sources synced!"
+        timeout-minutes: 90
 
       - name: Clone device tree
         run: |
-          cd /home/runner/work/op7reco-/op7reco-/workspace/twrp_build
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
           echo "📱 CLONING DEVICE TREE..."
           rm -rf ./${{ github.event.inputs.DEVICE_PATH }}
           git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-          echo "✅ DEVICE TREE CLONED!"
+          echo "✅ Device tree cloned!"
 
-      - name: Setup swap space
+      - name: Add TWRP recovery components
+        run: |
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
+          echo "🔧 ADDING TWRP RECOVERY COMPONENTS..."
+          
+          mkdir -p .repo/local_manifests
+          cat > .repo/local_manifests/twrp.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="github" fetch="https://github.com/" />
+  <project path="bootable/recovery" name="TeamWin/android_bootable_recovery" remote="github" revision="android-15.0" />
+</manifest>
+EOF
+          
+          repo sync -c -j$(nproc --all) bootable/recovery --force-sync --no-clone-bundle
+          echo "✅ TWRP components added!"
+
+      - name: Setup swap space (Linux only)
+        if: runner.os == 'Linux'
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 12
+          swap-size-gb: 16
 
       - name: Build TWRP recovery
         run: |
-          cd /home/runner/work/op7reco-/op7reco-/workspace/twrp_build
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
           
           echo "⚙️ SETTING UP BUILD ENVIRONMENT..."
           source build/envsetup.sh
@@ -135,12 +164,12 @@ jobs:
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
           export USE_CCACHE=1
-          ccache -M 20G
+          ccache -M 30G
           
           echo "🍽️ LUNCHING TARGET..."
           lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
           
-          echo "🏗️ BUILDING TWRP RECOVERY..."
+          echo "🏗️ BUILDING TWRP RECOVERY (this will take 2-4 hours)..."
           make clean
           make ${{ github.event.inputs.BUILD_TARGET }} -j$(nproc --all)
           
@@ -148,7 +177,7 @@ jobs:
 
       - name: Check build artifacts
         run: |
-          cd /home/runner/work/op7reco-/op7reco-/workspace/twrp_build
+          cd ${{ steps.workspace.outputs.folder }}/crdroid_android_15
           echo "📋 BUILD ARTIFACTS:"
           find out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ -name "*.img" -o -name "*.zip" | while read file; do
             echo "✅ FOUND: $file ($(du -h "$file" | cut -f1))"
@@ -159,26 +188,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            /home/runner/work/op7reco-/op7reco-/workspace/twrp_build/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-            /home/runner/work/op7reco-/op7reco-/workspace/twrp_build/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
-          name: TWRP-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
+            ${{ steps.workspace.outputs.folder }}/crdroid_android_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+            ${{ steps.workspace.outputs.folder }}/crdroid_android_15/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+          name: TWRP-${{ github.event.inputs.DEVICE_NAME }}-Android15-${{ github.run_number }}
           tag_name: twrp-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
           body: |
             🚀 TWRP Recovery for ${{ github.event.inputs.DEVICE_NAME }}
             
             **Build Details:**
-            - TWRP Version: 12.1
+            - Android Version: 15.0
+            - Source: crDroid
             - Device: ${{ github.event.inputs.DEVICE_NAME }}
-            - Build Target: ${{ github.event.inputs.BUILD_TARGET }}
+            - Runner: ${{ runner.os }}
             
             Built automatically via GitHub Actions
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload build logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
-          path: /home/runner/work/op7reco-/op7reco-/workspace/twrp_build/build.log
-          retention-days: 3
