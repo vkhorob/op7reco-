@@ -46,17 +46,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Full cleanup before starting
+      - name: Cleanup old workspace
         run: |
           echo "Cleaning old workspace..."
           sudo rm -rf $GITHUB_WORKSPACE/workspace || true
-          sudo rm -rf /home/runner/work/_temp || true
-          sudo rm -rf /home/runner/work/_actions || true
-          sudo rm -rf /home/runner/work/_toolcache || true
           echo "Cleanup complete."
-
-      - name: Cleanup SlimHub cache
-        uses: rokibhasansagar/slimhub_actions@main
 
       - name: Initialize workspace
         id: pwd
